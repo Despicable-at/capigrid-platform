@@ -4,9 +4,8 @@ services:
     name: capigrid-api
     env: node
     plan: starter
-    buildCommand: npm run render-build
+    buildCommand: npm install
     startCommand: npm run start:prod
-    staticPublishPath: ./build
     envVars:
       - key: NODE_ENV
         value: production
