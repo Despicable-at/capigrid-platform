@@ -2,9 +2,11 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "outDir": "dist/server",
-    "module": "commonjs", // Changed to commonjs
+    "module": "commonjs", 
     "target": "es2020",
-    "moduleResolution": "node", // Changed from "bundler" to "node"
+    "allowImportingTsExtensions": false, 
+    "emitDeclarationOnly": true,
+    "moduleResolution": "node", 
     "esModuleInterop": true,
     "skipLibCheck": true
   },
