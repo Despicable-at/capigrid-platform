@@ -1,5 +1,6 @@
 import * as oidc from "openid-client";
-import { Strategy } from "openid-client";
+import openid from "openid-client";
+const { Strategy } = openid;
 import passport from "passport";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
@@ -94,7 +95,7 @@ export async function setupAuth(app: Express) {
     }
   };
 
-  const strategy = new Strategy(
+  const strategy = new openid.Strategy(
     {
       client,
       params: {
