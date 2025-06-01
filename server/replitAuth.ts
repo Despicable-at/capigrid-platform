@@ -1,6 +1,5 @@
-import * as client from "openid-client";
-import { Strategy, type VerifyFunction } from "openid-client/passport";
-
+import * as oidc from "openid-client";
+import { Strategy } from "openid-client";
 import passport from "passport";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
@@ -8,61 +7,71 @@ import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
 
-if (!process.env.REPLIT_DOMAINS) {
-  throw new Error("Environment variable REPLIT_DOMAINS not provided");
+// Validate environment variables
+const OIDC_ISSUER = process.env.OIDC_ISSUER!;
+const OIDC_CLIENT_ID = process.env.OIDC_CLIENT_ID!;
+const OIDC_CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET!;
+const OIDC_CALLBACK_URL = process.env.OIDC_CALLBACK_URL!;
+
+if (!OIDC_ISSUER || !OIDC_CLIENT_ID || !OIDC_CLIENT_SECRET || !OIDC_CALLBACK_URL) {
+  throw new Error("Missing OIDC configuration environment variables");
 }
 
-const getOidcConfig = memoize(
+// Auth0-specific configuration
+const AUTH0_SCOPES = "openid profile email offline_access";
+const AUTH0_CONNECTION = "Username-Password-Authentication"; // Default Auth0 DB connection
+
+// OIDC Client setup
+const getOidcClient = memoize(
   async () => {
-    return await client.discovery(
-      new URL(process.env.ISSUER_URL ?? "https://replit.com/oidc"),
-      process.env.REPL_ID!
-    );
+    const issuer = await oidc.Issuer.discover(OIDC_ISSUER);
+    return new issuer.Client({
+      client_id: OIDC_CLIENT_ID,
+      client_secret: OIDC_CLIENT_SECRET,
+      redirect_uris: [OIDC_CALLBACK_URL],
+      response_types: ['code'],
+    });
   },
   { maxAge: 3600 * 1000 }
 );
 
+// Session configuration
 export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
   const pgStore = connectPg(session);
-  const sessionStore = new pgStore({
-    conString: process.env.DATABASE_URL,
-    createTableIfMissing: false,
-    ttl: sessionTtl,
-    tableName: "sessions",
-  });
   return session({
     secret: process.env.SESSION_SECRET!,
-    store: sessionStore,
+    store: new pgStore({
+      conString: process.env.DATABASE_URL,
+      createTableIfMissing: true,
+      ttl: sessionTtl,
+      tableName: "sessions",
+    }),
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       maxAge: sessionTtl,
+      sameSite: "lax",
     },
   });
 }
 
-function updateUserSession(
-  user: any,
-  tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers
-) {
-  user.claims = tokens.claims();
-  user.access_token = tokens.access_token;
-  user.refresh_token = tokens.refresh_token;
-  user.expires_at = user.claims?.exp;
+function updateUserSession(user: any, tokenSet: oidc.TokenSet) {
+  user.claims = tokenSet.claims();
+  user.access_token = tokenSet.access_token;
+  user.refresh_token = tokenSet.refresh_token;
+  user.expires_at = tokenSet.expires_at;
 }
 
-async function upsertUser(
-  claims: any,
-) {
+async function upsertUser(claims: any) {
   await storage.upsertUser({
-    id: claims["sub"],
-    email: claims["email"],
-    firstName: claims["first_name"],
-    lastName: claims["last_name"],
-    profileImageUrl: claims["profile_image_url"],
+    id: claims.sub,
+    email: claims.email,
+    firstName: claims.given_name || claims.nickname || "",
+    lastName: claims.family_name || "",
+    profileImageUrl: claims.picture || "",
   });
 }
 
@@ -72,56 +81,55 @@ export async function setupAuth(app: Express) {
   app.use(passport.initialize());
   app.use(passport.session());
 
-  const config = await getOidcConfig();
+  const client = await getOidcClient();
 
-  const verify: VerifyFunction = async (
-    tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers,
-    verified: passport.AuthenticateCallback
-  ) => {
-    const user = {};
-    updateUserSession(user, tokens);
-    await upsertUser(tokens.claims());
-    verified(null, user);
+  const verify: oidc.VerifyCallback = async (tokenSet, _, done) => {
+    try {
+      const user = {};
+      updateUserSession(user, tokenSet);
+      await upsertUser(tokenSet.claims());
+      return done(null, user);
+    } catch (error) {
+      return done(error);
+    }
   };
 
-  for (const domain of process.env
-    .REPLIT_DOMAINS!.split(",")) {
-    const strategy = new Strategy(
-      {
-        name: `replitauth:${domain}`,
-        config,
-        scope: "openid email profile offline_access",
-        callbackURL: `https://${domain}/api/callback`,
+  const strategy = new Strategy(
+    {
+      client,
+      params: {
+        scope: AUTH0_SCOPES,
+        connection: AUTH0_CONNECTION, // Auth0-specific parameter
       },
-      verify,
-    );
-    passport.use(strategy);
-  }
+    },
+    verify
+  );
 
-  passport.serializeUser((user: Express.User, cb) => cb(null, user));
-  passport.deserializeUser((user: Express.User, cb) => cb(null, user));
+  passport.use("auth0", strategy);
+  passport.serializeUser((user: Express.User, done) => done(null, user));
+  passport.deserializeUser((user: Express.User, done) => done(null, user));
 
   app.get("/api/login", (req, res, next) => {
-    passport.authenticate(`replitauth:${req.hostname}`, {
-      prompt: "login consent",
-      scope: ["openid", "email", "profile", "offline_access"],
+    passport.authenticate("auth0", {
+      prompt: "login",
     })(req, res, next);
   });
 
   app.get("/api/callback", (req, res, next) => {
-    passport.authenticate(`replitauth:${req.hostname}`, {
+    passport.authenticate("auth0", {
       successReturnToOrRedirect: "/",
-      failureRedirect: "/api/login",
+      failureRedirect: "/login-error",
     })(req, res, next);
   });
 
   app.get("/api/logout", (req, res) => {
     req.logout(() => {
       res.redirect(
-        client.buildEndSessionUrl(config, {
-          client_id: process.env.REPL_ID!,
-          post_logout_redirect_uri: `${req.protocol}://${req.hostname}`,
-        }).href
+        `${OIDC_ISSUER}v2/logout?` +
+        new URLSearchParams({
+          client_id: OIDC_CLIENT_ID,
+          returnTo: `${req.protocol}://${req.hostname}`,
+        }).toString()
       );
     });
   });
@@ -141,17 +149,15 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
 
   const refreshToken = user.refresh_token;
   if (!refreshToken) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
+    return res.status(401).json({ message: "Unauthorized" });
   }
 
   try {
-    const config = await getOidcConfig();
-    const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
-    updateUserSession(user, tokenResponse);
+    const client = await getOidcClient();
+    const tokenSet = await client.refresh(refreshToken);
+    updateUserSession(user, tokenSet);
     return next();
   } catch (error) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
+    return res.status(401).json({ message: "Unauthorized" });
   }
 };
