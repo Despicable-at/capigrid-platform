@@ -19,7 +19,7 @@
     },
     "types": ["node", "vite/client"],
     "esModuleInterop": true,
-    "allowImportingTsExtensions": true,
+    "allowImportingTsExtensions": true, // Keep enabled for client
     "outDir": "dist",
     "rootDir": "."
   },
