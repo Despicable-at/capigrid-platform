@@ -1,6 +1,6 @@
 // server/replitAuth.ts
 
-import { Issuer, generators, Client, TokenSet, Strategy as OIDCStrategy } from "openid-client";
+import * as openid from "openid-client";
 import passport from "passport";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
@@ -30,9 +30,9 @@ const AUTH0_CONNECTION = "Username-Password-Authentication";
 // 3) OIDC Client setup (memoized so we don't re‐discover on every request)
 // ─────────────────────────────────────────────────────────────
 const getOidcClient = memoize(
-  async (): Promise<Client> => {
+  async (): Promise<openid.Client> => {
     // Discover returns an Issuer instance:
-    const issuer = await Issuer.discover(OIDC_ISSUER);
+    const issuer = await openid.Issuer.discover(OIDC_ISSUER);
     return new issuer.Client({
       client_id: OIDC_CLIENT_ID,
       client_secret: OIDC_CLIENT_SECRET,
@@ -69,7 +69,7 @@ export function getSession() {
   });
 }
 
-function updateUserSession(user: any, tokenSet: TokenSet) {
+function updateUserSession(user: any, tokenSet: openid.TokenSet) {
   user.claims = tokenSet.claims();
   user.access_token = tokenSet.access_token;
   user.refresh_token = tokenSet.refresh_token;
@@ -98,7 +98,7 @@ export async function setupAuth(app: Express) {
   const client = await getOidcClient();
 
   const verify = async (
-    tokenSet: TokenSet,
+    tokenSet: openid.TokenSet,
     userinfo: Record<string, any>,
     done: (err: Error | null, user?: any) => void
   ) => {
@@ -115,7 +115,7 @@ export async function setupAuth(app: Express) {
   // Use openid-client's Strategy under a different name to avoid conflict with passport-local's Strategy
   passport.use(
     "auth0",
-    new OIDCStrategy(
+    new openid.Strategy(
       {
         client,
         params: {
