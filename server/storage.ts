@@ -17,7 +17,7 @@ import {
   type InsertCampaignComment,
   type AdminCredential,
   type InsertAdminCredential,
-} from "@shared/schema";
+} from "@shared/schema.js";
 import { db } from "./db.js";
 import { eq, desc, and, sql, ilike, or } from "drizzle-orm";
 
