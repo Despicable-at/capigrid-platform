@@ -103,18 +103,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Contribution routes
+  // Contribution routes - FIXED amount access and conversion
   app.post('/api/campaigns/:id/contribute', async (req, res) => {
     try {
-      const contributionData = insertContributionSchema.parse({
+      const parsedData = insertContributionSchema.parse({
         ...req.body,
         campaignId: req.params.id,
       });
       
+      // Ensure amount is a string for storage
+      const amount = typeof parsedData.amount === 'number' 
+        ? parsedData.amount.toString() 
+        : parsedData.amount;
+      
+      const contributionData = {
+        ...parsedData,
+        amount
+      };
+      
       const contribution = await storage.createContribution(contributionData);
       
       // Update campaign amount
-      await storage.updateCampaignAmount(req.params.id, contributionData.amount);
+      await storage.updateCampaignAmount(req.params.id, amount);
       
       res.status(201).json(contribution);
     } catch (error) {
@@ -250,7 +260,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Payment processing routes
+  // Payment processing routes - FIXED type safety
   app.post('/api/payments/initialize', async (req, res) => {
     try {
       const { amount, email, campaignId } = req.body;
@@ -265,6 +275,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ message: "Payment service not configured" });
       }
 
+      const amountInKobo = Math.round(parseFloat(amount.toString()) * 100);
       const response = await fetch('https://api.paystack.co/transaction/initialize', {
         method: 'POST',
         headers: {
@@ -272,7 +283,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          amount: Math.round(parseFloat(amount) * 100), // Convert to kobo
+          amount: amountInKobo,
           email,
           callback_url: `${process.env.BASE_URL || 'http://localhost:5000'}/campaigns/${campaignId}`,
           metadata: {
@@ -319,13 +330,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Payment verification failed" });
       }
 
+      // Validate metadata
+      if (!data.data.metadata || typeof data.data.metadata.campaignId !== 'string') {
+        return res.status(400).json({ message: "Invalid payment metadata" });
+      }
+
       // Create contribution record
+      const amount = (data.data.amount / 100).toFixed(2);
       const contributionData = {
         campaignId: data.data.metadata.campaignId,
-        amount: (data.data.amount / 100).toString(), // Convert from kobo
+        amount: amount.toString(),
         paymentMethod: 'card',
         paymentId: reference,
-        contributorEmail: data.data.customer.email,
+        contributorEmail: data.data.customer?.email || "anonymous@example.com",
         status: 'completed' as const,
       };
 
