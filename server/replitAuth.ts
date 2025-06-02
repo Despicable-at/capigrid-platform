@@ -1,8 +1,6 @@
 // server/replitAuth.ts
 
-import * as openid from "openid-client";    // default ESM import
-const { Issuer, generators } = openid;  // destructure methods you need
-
+import { Issuer, generators, Client, TokenSet, Strategy } from "openid-client";
 import passport from "passport";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
@@ -29,12 +27,10 @@ const AUTH0_SCOPES = "openid profile email offline_access";
 const AUTH0_CONNECTION = "Username-Password-Authentication";
 
 // ───────────────────────────────────────────────────────────────────────────────
-// 3) OIDC Client setup (memoized so we don’t re‐discover on every request)
+// 3) OIDC Client setup (memoized so we don't re‐discover on every request)
 // ───────────────────────────────────────────────────────────────────────────────
-type OidcClient = openid.Client;
-
 const getOidcClient = memoize(
-  async (): Promise<OidcClient> => {
+  async (): Promise<Client> => {
     // Discover returns an Issuer instance:
     const issuer = await Issuer.discover(OIDC_ISSUER);
     return new issuer.Client({
@@ -73,7 +69,7 @@ export function getSession() {
   });
 }
 
-function updateUserSession(user: any, tokenSet: openid.TokenSet) {
+function updateUserSession(user: any, tokenSet: TokenSet) {
   user.claims = tokenSet.claims();
   user.access_token = tokenSet.access_token;
   user.refresh_token = tokenSet.refresh_token;
@@ -101,13 +97,8 @@ export async function setupAuth(app: Express) {
 
   const client = await getOidcClient();
 
-  // The Passport strategy is available directly on openid.Client.prototype.adapter.PassportStrategy
-  const Strategy = (openid as any).Strategy as typeof passport.Strategy;
-  // Alternatively, you can import the helper from the package's own types:
-  // import { PassportStrategy } from "openid-client";
-
   const verify = async (
-    tokenSet: openid.TokenSet,
+    tokenSet: TokenSet,
     userinfo: Record<string, any>,
     done: (err: Error | null, user?: any) => void
   ) => {
@@ -151,7 +142,10 @@ export async function setupAuth(app: Express) {
   });
 
   app.get("/api/logout", (req, res) => {
-    req.logout(() => {
+    req.logout((err) => {
+      if (err) {
+        console.error("Logout error:", err);
+      }
       res.redirect(
         `${OIDC_ISSUER}v2/logout?` +
           new URLSearchParams({
@@ -160,14 +154,6 @@ export async function setupAuth(app: Express) {
           }).toString()
       );
     });
-    req.logout(); // remove the callback
-    res.redirect(
-      `${OIDC_ISSUER}v2/logout?` +
-        new URLSearchParams({
-          client_id: OIDC_CLIENT_ID,
-          returnTo: `${req.protocol}://${req.hostname}`,
-        }).toString()
-    );
   });
 }
 
@@ -189,7 +175,7 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
 
   try {
     const client = await getOidcClient();
-    const newTokenSet = await (client as OidcClient).refresh(refreshToken);
+    const newTokenSet = await client.refresh(refreshToken);
     updateUserSession(user, newTokenSet);
     return next();
   } catch (err) {
