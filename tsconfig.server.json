@@ -1,11 +1,11 @@
-// tsconfig.server.json
+
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "outDir": "dist/server",
-    "module": "node16",           // ESM‐compatible
+    "module": "node16",        
     "target": "es2020",          
-    "moduleResolution": "node16", // resolve subpaths and import.meta
+    "moduleResolution": "node16",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "skipLibCheck": true
