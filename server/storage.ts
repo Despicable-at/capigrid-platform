@@ -18,7 +18,7 @@ import {
   type AdminCredential,
   type InsertAdminCredential,
 } from "@shared/schema";
-import { db } from "./db";
+import { db } from "./db.js";
 import { eq, desc, and, sql, ilike, or } from "drizzle-orm";
 
 // Interface for storage operations
