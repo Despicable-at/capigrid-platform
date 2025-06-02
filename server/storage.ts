@@ -98,24 +98,34 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  // ───────────────────────────────────────────────────────────────────────────────
   // Campaign operations
-  async getCampaigns(filters?: { category?: string; fundingModel?: string; status?: string; featured?: boolean }): Promise<Campaign[]> {
-    let query = db.select().from(campaigns);
-    
+  async getCampaigns(
+    filters?: { category?: string; fundingModel?: string; status?: string; featured?: boolean }
+  ): Promise<Campaign[]> {
+    // 1️⃣ Always show only approved, active campaigns:
     const conditions = [
-      eq(campaigns.approved, true), // Only show approved campaigns
-      eq(campaigns.status, "active") // Only show active campaigns
+      eq(campaigns.approved, true),
+      eq(campaigns.status, "active"),
     ];
-    
-    if (filters) {
-      if (filters.category) conditions.push(eq(campaigns.category, filters.category));
-      if (filters.fundingModel) conditions.push(eq(campaigns.fundingModel, filters.fundingModel));
-      if (filters.featured) conditions.push(eq(campaigns.featured, filters.featured));
+
+    // 2️⃣ If the caller passed any additional filters, push them:
+    if (filters?.category) {
+      conditions.push(eq(campaigns.category, filters.category));
     }
-    
-    query = query.where(and(...conditions));
-    
-    return await query.orderBy(desc(campaigns.createdAt));
+    if (filters?.fundingModel) {
+      conditions.push(eq(campaigns.fundingModel, filters.fundingModel));
+    }
+    if (filters?.featured !== undefined) {
+      conditions.push(eq(campaigns.featured, filters.featured));
+    }
+
+    // 3️⃣ Build one single Drizzle query that includes all conditions at once:
+    return await db
+      .select()
+      .from(campaigns)
+      .where(and(...conditions))
+      .orderBy(desc(campaigns.createdAt));
   }
 
   async getCampaign(id: string): Promise<Campaign | undefined> {
@@ -177,6 +187,7 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(campaigns.createdAt));
   }
 
+  // ───────────────────────────────────────────────────────────────────────────────
   // Contribution operations
   async createContribution(contribution: InsertContribution): Promise<Contribution> {
     const [newContribution] = await db
@@ -212,6 +223,7 @@ export class DatabaseStorage implements IStorage {
       .where(eq(campaigns.id, campaignId));
   }
 
+  // ───────────────────────────────────────────────────────────────────────────────
   // Campaign updates
   async createCampaignUpdate(update: InsertCampaignUpdate): Promise<CampaignUpdate> {
     const [newUpdate] = await db
@@ -229,6 +241,7 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(campaignUpdates.createdAt));
   }
 
+  // ───────────────────────────────────────────────────────────────────────────────
   // Campaign comments
   async createCampaignComment(comment: InsertCampaignComment): Promise<CampaignComment> {
     const [newComment] = await db
@@ -252,6 +265,7 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  // ───────────────────────────────────────────────────────────────────────────────
   // Analytics
   async getPlatformStats(): Promise<{
     totalRevenue: string;
@@ -327,6 +341,7 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  // ───────────────────────────────────────────────────────────────────────────────
   // Admin operations
   async getAdminByUsername(username: string): Promise<AdminCredential | undefined> {
     const [admin] = await db.select().from(adminCredentials).where(eq(adminCredentials.username, username));
@@ -348,6 +363,7 @@ export class DatabaseStorage implements IStorage {
       .where(eq(adminCredentials.id, id));
   }
 
+  // ───────────────────────────────────────────────────────────────────────────────
   // Campaign approval operations
   async getPendingCampaigns(): Promise<Campaign[]> {
     return await db
