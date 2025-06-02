@@ -1,10 +1,5 @@
-import {
-  Issuer,
-  Strategy,
-  TokenSet,
-  type VerifyCallback
-} from "openid-client";
-const { Strategy } = openid;
+// server/replitAuth.ts
+import { Issuer, Strategy, TokenSet, type VerifyCallback } from "openid-client";
 import passport from "passport";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
@@ -29,7 +24,7 @@ const AUTH0_CONNECTION = "Username-Password-Authentication"; // Default Auth0 DB
 // OIDC Client setup
 const getOidcClient = memoize(
   async () => {
-    const issuer = await oidc.Issuer.discover(OIDC_ISSUER);
+    const issuer = await Issuer.discover(OIDC_ISSUER);
     return new issuer.Client({
       client_id: OIDC_CLIENT_ID,
       client_secret: OIDC_CLIENT_SECRET,
@@ -63,7 +58,7 @@ export function getSession() {
   });
 }
 
-function updateUserSession(user: any, tokenSet: oidc.TokenSet) {
+function updateUserSession(user: any, tokenSet: TokenSet) {
   user.claims = tokenSet.claims();
   user.access_token = tokenSet.access_token;
   user.refresh_token = tokenSet.refresh_token;
@@ -88,9 +83,9 @@ export async function setupAuth(app: Express) {
 
   const client = await getOidcClient();
 
-  const verify: oidc.VerifyCallback = async (tokenSet, _, done) => {
+  const verify: VerifyCallback = async (tokenSet, _, done) => {
     try {
-      const user = {};
+      const user: any = {};
       updateUserSession(user, tokenSet);
       await upsertUser(tokenSet.claims());
       return done(null, user);
@@ -99,7 +94,7 @@ export async function setupAuth(app: Express) {
     }
   };
 
-  const strategy = new openid.Strategy(
+  const strategy = new Strategy(
     {
       client,
       params: {
