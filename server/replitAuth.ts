@@ -1,6 +1,6 @@
 // server/replitAuth.ts
 
-import { Issuer, generators, Client, TokenSet, Strategy } from "openid-client";
+import { Issuer, generators, Client, TokenSet, Strategy as OIDCStrategy } from "openid-client";
 import passport from "passport";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
@@ -8,9 +8,9 @@ import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage.js";
 
-// ───────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 // 1) Validate environment variables
-// ───────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 const OIDC_ISSUER = process.env.OIDC_ISSUER!;
 const OIDC_CLIENT_ID = process.env.OIDC_CLIENT_ID!;
 const OIDC_CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET!;
@@ -20,15 +20,15 @@ if (!OIDC_ISSUER || !OIDC_CLIENT_ID || !OIDC_CLIENT_SECRET || !OIDC_CALLBACK_URL
   throw new Error("Missing OIDC configuration environment variables");
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 // 2) Auth0‐specific configuration
-// ───────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 const AUTH0_SCOPES = "openid profile email offline_access";
 const AUTH0_CONNECTION = "Username-Password-Authentication";
 
-// ───────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 // 3) OIDC Client setup (memoized so we don't re‐discover on every request)
-// ───────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 const getOidcClient = memoize(
   async (): Promise<Client> => {
     // Discover returns an Issuer instance:
@@ -40,12 +40,12 @@ const getOidcClient = memoize(
       response_types: ["code"],
     });
   },
-  { maxAge: 3600 * 1000 }
+  { maxAge: 3600 * 1000, promise: true }
 );
 
-// ───────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 // 4) Session configuration
-// ───────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
   const PgStore = connectPg(session);
@@ -55,7 +55,7 @@ export function getSession() {
     store: new PgStore({
       conString: process.env.DATABASE_URL,
       createTableIfMissing: true,
-      ttl: sessionTtl,
+      ttl: sessionTtl / 1000, // connect-pg-simple expects seconds
       tableName: "sessions",
     }),
     resave: false,
@@ -86,9 +86,9 @@ async function upsertUser(claims: Record<string, any>) {
   });
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 // 5) setupAuth: plug Passport + Express + the openid-client Strategy
-// ───────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
   app.use(getSession());
@@ -112,10 +112,10 @@ export async function setupAuth(app: Express) {
     }
   };
 
-  // Construct the Passport strategy
+  // Use openid-client's Strategy under a different name to avoid conflict with passport-local's Strategy
   passport.use(
     "auth0",
-    new Strategy(
+    new OIDCStrategy(
       {
         client,
         params: {
@@ -142,15 +142,15 @@ export async function setupAuth(app: Express) {
   });
 
   app.get("/api/logout", (req, res) => {
-    req.logout((err) => {
+    req.logout(function (err) {
       if (err) {
         console.error("Logout error:", err);
       }
       res.redirect(
-        `${OIDC_ISSUER}v2/logout?` +
+        `${OIDC_ISSUER.replace(/\/$/, "")}/v2/logout?` +
           new URLSearchParams({
             client_id: OIDC_CLIENT_ID,
-            returnTo: `${req.protocol}://${req.hostname}`,
+            returnTo: `${req.protocol}://${req.get("host")}`,
           }).toString()
       );
     });
@@ -159,7 +159,7 @@ export async function setupAuth(app: Express) {
 
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
   const user = req.user as any;
-  if (!req.isAuthenticated() || !user.expires_at) {
+  if (!req.isAuthenticated() || !user?.expires_at) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
