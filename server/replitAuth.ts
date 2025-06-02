@@ -1,11 +1,8 @@
 // server/replitAuth.ts
 
-import { Issuer, type Client, type TokenSet, type IssuerMetadata } from "openid-client";
-import {
-  Strategy,
-  type StrategyOptions,
-  type VerifyFunction
-} from "openid-client/passport";
+import openid from "openid-client";     // default ESM import
+const { Issuer, generators } = openid;  // destructure methods you need
+
 import passport from "passport";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
@@ -26,18 +23,20 @@ if (!OIDC_ISSUER || !OIDC_CLIENT_ID || !OIDC_CLIENT_SECRET || !OIDC_CALLBACK_URL
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
-// 2) Auth0-specific configuration
+// 2) Auth0‐specific configuration
 // ───────────────────────────────────────────────────────────────────────────────
 const AUTH0_SCOPES = "openid profile email offline_access";
-const AUTH0_CONNECTION = "Username-Password-Authentication"; // Default Auth0 DB connection
+const AUTH0_CONNECTION = "Username-Password-Authentication";
 
 // ───────────────────────────────────────────────────────────────────────────────
-// 3) OIDC Client setup (memoized so we don’t re-discover on every request)
+// 3) OIDC Client setup (memoized so we don’t re‐discover on every request)
 // ───────────────────────────────────────────────────────────────────────────────
+type OidcClient = openid.Client;
+
 const getOidcClient = memoize(
-  async (): Promise<Client> => {
-    // Discover issuer metadata at runtime:
-    const issuer: Issuer<IssuerMetadata, any, any> = await Issuer.discover(OIDC_ISSUER);
+  async (): Promise<OidcClient> => {
+    // Discover returns an Issuer instance:
+    const issuer = await Issuer.discover(OIDC_ISSUER);
     return new issuer.Client({
       client_id: OIDC_CLIENT_ID,
       client_secret: OIDC_CLIENT_SECRET,
@@ -74,14 +73,14 @@ export function getSession() {
   });
 }
 
-function updateUserSession(user: any, tokenSet: TokenSet) {
+function updateUserSession(user: any, tokenSet: openid.TokenSet) {
   user.claims = tokenSet.claims();
   user.access_token = tokenSet.access_token;
   user.refresh_token = tokenSet.refresh_token;
   user.expires_at = tokenSet.expires_at;
 }
 
-async function upsertUser(claims: any) {
+async function upsertUser(claims: Record<string, any>) {
   await storage.upsertUser({
     id: claims.sub,
     email: claims.email,
@@ -102,30 +101,41 @@ export async function setupAuth(app: Express) {
 
   const client = await getOidcClient();
 
-  const verify: VerifyFunction = async (tokenSet, _userinfo, done) => {
+  // The Passport strategy is available directly on openid.Client.prototype.adapter.PassportStrategy
+  const Strategy = (openid as any).Strategy as typeof passport.Strategy;
+  // Alternatively, you can import the helper from the package's own types:
+  // import { PassportStrategy } from "openid-client";
+
+  const verify = async (
+    tokenSet: openid.TokenSet,
+    userinfo: Record<string, any>,
+    done: (err: Error | null, user?: any) => void
+  ) => {
     try {
       const user: any = {};
-      updateUserSession(user, tokenSet as TokenSet);
-      await upsertUser((tokenSet as TokenSet).claims());
+      updateUserSession(user, tokenSet);
+      await upsertUser(tokenSet.claims());
       return done(null, user);
     } catch (err) {
       return done(err as Error);
     }
   };
 
-  // Note: StrategyOptions is optional here; you can pass params directly.
-  const strategy = new Strategy(
-    {
-      client,
-      params: {
-        scope: AUTH0_SCOPES,
-        connection: AUTH0_CONNECTION, // Auth0-only parameter
+  // Construct the Passport strategy
+  passport.use(
+    "auth0",
+    new Strategy(
+      {
+        client,
+        params: {
+          scope: AUTH0_SCOPES,
+          connection: AUTH0_CONNECTION,
+        },
       },
-    } as StrategyOptions,
-    verify
+      verify
+    )
   );
 
-  passport.use("auth0", strategy);
   passport.serializeUser((user: Express.User, done) => done(null, user));
   passport.deserializeUser((user: Express.User, done) => done(null, user));
 
@@ -153,12 +163,8 @@ export async function setupAuth(app: Express) {
   });
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
-// 6) isAuthenticated: middleware to check token expiry & refresh if needed
-// ───────────────────────────────────────────────────────────────────────────────
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
   const user = req.user as any;
-
   if (!req.isAuthenticated() || !user.expires_at) {
     return res.status(401).json({ message: "Unauthorized" });
   }
@@ -175,10 +181,10 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
 
   try {
     const client = await getOidcClient();
-    const tokenSet = await (client as Client).refresh(refreshToken);
-    updateUserSession(user, tokenSet as TokenSet);
+    const newTokenSet = await (client as OidcClient).refresh(refreshToken);
+    updateUserSession(user, newTokenSet);
     return next();
-  } catch (error) {
+  } catch (err) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 };
