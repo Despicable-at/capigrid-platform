@@ -1,6 +1,6 @@
 // server/replitAuth.ts
 
-import openid from "openid-client";     // default ESM import
+import * as openid from "openid-client";    // default ESM import
 const { Issuer, generators } = openid;  // destructure methods you need
 
 import passport from "passport";
@@ -160,6 +160,14 @@ export async function setupAuth(app: Express) {
           }).toString()
       );
     });
+    req.logout(); // remove the callback
+    res.redirect(
+      `${OIDC_ISSUER}v2/logout?` +
+        new URLSearchParams({
+          client_id: OIDC_CLIENT_ID,
+          returnTo: `${req.protocol}://${req.hostname}`,
+        }).toString()
+    );
   });
 }
 
