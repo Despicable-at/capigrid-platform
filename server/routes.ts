@@ -1,11 +1,15 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
-import { storage } from "./storage.js";
+import { createServer, type Server } from "http";+import { storage } from "./storage.js";
 import { setupAuth, isAuthenticated } from "./replitAuth.js";
 import bcrypt from "bcryptjs";
 import speakeasy from "speakeasy";
-import { adminLoginSchema } from "@shared/schema";
-import { insertCampaignSchema, insertContributionSchema, insertCampaignUpdateSchema, insertCampaignCommentSchema } from "@shared/schema";
+import {
+  adminLoginSchema,
+  insertCampaignSchema,
+  insertContributionSchema,
+  insertCampaignUpdateSchema,
+  insertCampaignCommentSchema,
+} from "../shared/schema.js";
 import { z } from "zod";
 
 export async function registerRoutes(app: Express): Promise<Server> {
