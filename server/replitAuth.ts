@@ -1,5 +1,9 @@
-import * as oidc from "openid-client";
-import openid from "openid-client";
+import {
+  Issuer,
+  Strategy,
+  TokenSet,
+  type VerifyCallback
+} from "openid-client";
 const { Strategy } = openid;
 import passport from "passport";
 import session from "express-session";
