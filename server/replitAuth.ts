@@ -1,5 +1,11 @@
 // server/replitAuth.ts
-import { Issuer, Strategy, TokenSet, type VerifyCallback } from "openid-client";
+
+import { Issuer, type Client, type TokenSet, type IssuerMetadata } from "openid-client";
+import {
+  Strategy,
+  type StrategyOptions,
+  type VerifyFunction
+} from "openid-client/passport";
 import passport from "passport";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
@@ -7,7 +13,9 @@ import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
 
-// Validate environment variables
+// ───────────────────────────────────────────────────────────────────────────────
+// 1) Validate environment variables
+// ───────────────────────────────────────────────────────────────────────────────
 const OIDC_ISSUER = process.env.OIDC_ISSUER!;
 const OIDC_CLIENT_ID = process.env.OIDC_CLIENT_ID!;
 const OIDC_CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET!;
@@ -17,31 +25,39 @@ if (!OIDC_ISSUER || !OIDC_CLIENT_ID || !OIDC_CLIENT_SECRET || !OIDC_CALLBACK_URL
   throw new Error("Missing OIDC configuration environment variables");
 }
 
-// Auth0-specific configuration
+// ───────────────────────────────────────────────────────────────────────────────
+// 2) Auth0-specific configuration
+// ───────────────────────────────────────────────────────────────────────────────
 const AUTH0_SCOPES = "openid profile email offline_access";
 const AUTH0_CONNECTION = "Username-Password-Authentication"; // Default Auth0 DB connection
 
-// OIDC Client setup
+// ───────────────────────────────────────────────────────────────────────────────
+// 3) OIDC Client setup (memoized so we don’t re-discover on every request)
+// ───────────────────────────────────────────────────────────────────────────────
 const getOidcClient = memoize(
-  async () => {
-    const issuer = await Issuer.discover(OIDC_ISSUER);
+  async (): Promise<Client> => {
+    // Discover issuer metadata at runtime:
+    const issuer: Issuer<IssuerMetadata, any, any> = await Issuer.discover(OIDC_ISSUER);
     return new issuer.Client({
       client_id: OIDC_CLIENT_ID,
       client_secret: OIDC_CLIENT_SECRET,
       redirect_uris: [OIDC_CALLBACK_URL],
-      response_types: ['code'],
+      response_types: ["code"],
     });
   },
   { maxAge: 3600 * 1000 }
 );
 
-// Session configuration
+// ───────────────────────────────────────────────────────────────────────────────
+// 4) Session configuration
+// ───────────────────────────────────────────────────────────────────────────────
 export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
-  const pgStore = connectPg(session);
+  const PgStore = connectPg(session);
+
   return session({
     secret: process.env.SESSION_SECRET!,
-    store: new pgStore({
+    store: new PgStore({
       conString: process.env.DATABASE_URL,
       createTableIfMissing: true,
       ttl: sessionTtl,
@@ -75,6 +91,9 @@ async function upsertUser(claims: any) {
   });
 }
 
+// ───────────────────────────────────────────────────────────────────────────────
+// 5) setupAuth: plug Passport + Express + the openid-client Strategy
+// ───────────────────────────────────────────────────────────────────────────────
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
   app.use(getSession());
@@ -83,25 +102,26 @@ export async function setupAuth(app: Express) {
 
   const client = await getOidcClient();
 
-  const verify: VerifyCallback = async (tokenSet, _, done) => {
+  const verify: VerifyFunction = async (tokenSet, _userinfo, done) => {
     try {
       const user: any = {};
-      updateUserSession(user, tokenSet);
-      await upsertUser(tokenSet.claims());
+      updateUserSession(user, tokenSet as TokenSet);
+      await upsertUser((tokenSet as TokenSet).claims());
       return done(null, user);
-    } catch (error) {
-      return done(error);
+    } catch (err) {
+      return done(err as Error);
     }
   };
 
+  // Note: StrategyOptions is optional here; you can pass params directly.
   const strategy = new Strategy(
     {
       client,
       params: {
         scope: AUTH0_SCOPES,
-        connection: AUTH0_CONNECTION, // Auth0-specific parameter
+        connection: AUTH0_CONNECTION, // Auth0-only parameter
       },
-    },
+    } as StrategyOptions,
     verify
   );
 
@@ -110,9 +130,7 @@ export async function setupAuth(app: Express) {
   passport.deserializeUser((user: Express.User, done) => done(null, user));
 
   app.get("/api/login", (req, res, next) => {
-    passport.authenticate("auth0", {
-      prompt: "login",
-    })(req, res, next);
+    passport.authenticate("auth0", { prompt: "login" })(req, res, next);
   });
 
   app.get("/api/callback", (req, res, next) => {
@@ -126,15 +144,18 @@ export async function setupAuth(app: Express) {
     req.logout(() => {
       res.redirect(
         `${OIDC_ISSUER}v2/logout?` +
-        new URLSearchParams({
-          client_id: OIDC_CLIENT_ID,
-          returnTo: `${req.protocol}://${req.hostname}`,
-        }).toString()
+          new URLSearchParams({
+            client_id: OIDC_CLIENT_ID,
+            returnTo: `${req.protocol}://${req.hostname}`,
+          }).toString()
       );
     });
   });
 }
 
+// ───────────────────────────────────────────────────────────────────────────────
+// 6) isAuthenticated: middleware to check token expiry & refresh if needed
+// ───────────────────────────────────────────────────────────────────────────────
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
   const user = req.user as any;
 
@@ -154,8 +175,8 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
 
   try {
     const client = await getOidcClient();
-    const tokenSet = await client.refresh(refreshToken);
-    updateUserSession(user, tokenSet);
+    const tokenSet = await (client as Client).refresh(refreshToken);
+    updateUserSession(user, tokenSet as TokenSet);
     return next();
   } catch (error) {
     return res.status(401).json({ message: "Unauthorized" });
